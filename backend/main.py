@@ -5,13 +5,15 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin = {"http://localhost:3000"},
+    allow_origins = ["http://localhost:3000"],
     allow_credentials = True,
     allow_methods = ["*"],
+    # ex) GET, POST, PUT, DELETE, OPTIONS
     allow_headers = ["*"]
+    # ex) Authorization, Set-Cookie, Cookie, Content-Type, Accept, X-Requested-With
 )
 
-#uvicorn main:app --reload
+# way to run : uvicorn main:app --reload
 
 @app.get("/health")
 def health():
