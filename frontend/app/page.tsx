@@ -1,4 +1,5 @@
 import AskForm from "@/components/AskForm";
+import BackendStatus from "@/components/BackendStatus";
 
 export default function Home() {
   return (
@@ -11,8 +12,9 @@ export default function Home() {
         <p className="text-gray-500 mb-8">
           Ask questions about AI infrastructure companies and documents.
         </p>
-
+        <BackendStatus />
         <AskForm />
+
       </div>
     </main>
   );
