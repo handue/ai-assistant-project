@@ -12,7 +12,7 @@ export default function Home() {
         <p className="text-gray-500 mb-8">
           Ask questions about AI infrastructure companies and documents.
         </p>
-        <BackendStatus />
+        {/* <BackendStatus /> */}
         <AskForm />
 
       </div>
