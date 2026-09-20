@@ -1,16 +1,37 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { apiPost } from "../lib/api";
+
+type AskRequest = {
+  question: string;
+};
+
+type AskResponse = {
+  answer: string;
+}
 
 export default function AskForm() {
   const [question, setQuestion] = useState("");
   const [submittedQuestion, setSubmittedQuestion] = useState("");
 
+  const askMutation = useMutation({
+    mutationFn: (request: AskRequest) => apiPost<AskRequest, AskResponse>("/ask", request),
+  });
+
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    setSubmittedQuestion(question);
-    setQuestion("");
+    if (!question.trim()) {
+      return;
+    }
+    // useQuery = auto fetch data from backend,
+    // useMutation = manually trigger a request to the backend, usually for creating, updating, or deleting data.
+    
+    askMutation.mutate({
+      question: question,
+    });
   }
 
   return (
@@ -26,16 +47,23 @@ export default function AskForm() {
 
         <button
           type="submit"
+          disabled={askMutation.isPending}
           className="border rounded-lg px-5 py-3"
         >
-          Ask
+          {askMutation.isPending ? "Asking..." : "Ask"}
         </button>
       </form>
 
-      {submittedQuestion && (
+      {askMutation.isError && (
+        <p className="mt-4">
+          Error: {askMutation.error.message}
+        </p>
+      )}
+
+      {askMutation.data && (
         <div className="mt-8 border rounded-lg p-4">
-          <p className="font-semibold">Your question</p>
-          <p>{submittedQuestion}</p>
+          <p className="font-semibold">Answer</p>
+          <p>{askMutation.data.answer}</p>
         </div>
       )}
     </>
