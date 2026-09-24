@@ -1,5 +1,6 @@
 import AskForm from "@/components/AskForm";
 import BackendStatus from "@/components/BackendStatus";
+import ChatMessages from "@/components/ChatMessages";
 
 export default function Home() {
   return (
@@ -10,10 +11,11 @@ export default function Home() {
         </h1>
 
         <p className="text-gray-500 mb-8">
-          Ask questions about AI infrastructure companies and documents.
+          Ask questions about you want to know
         </p>
         {/* <BackendStatus /> */}
         <AskForm />
+        <ChatMessages />
 
       </div>
     </main>

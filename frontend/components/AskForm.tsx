@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiPost } from "../lib/api";
+import { useChatStore } from "../store/chatStore";
 
 type AskRequest = {
   question: string;
@@ -14,24 +15,44 @@ type AskResponse = {
 
 export default function AskForm() {
   const [question, setQuestion] = useState("");
-  const [submittedQuestion, setSubmittedQuestion] = useState("");
+  // const [submittedQuestion, setSubmittedQuestion] = useState("");
+
+  const addMessage = useChatStore((state) => state.addMessage);
 
   const askMutation = useMutation({
     mutationFn: (request: AskRequest) => apiPost<AskRequest, AskResponse>("/ask", request),
+
+    onSuccess: (data) => {
+      addMessage({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: data.answer,
+      })
+    }
   });
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!question.trim()) {
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion) {
       return;
     }
     // useQuery = auto fetch data from backend,
     // useMutation = manually trigger a request to the backend, usually for creating, updating, or deleting data.
-    
-    askMutation.mutate({
-      question: question,
+
+    addMessage({
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmedQuestion,
     });
+
+    askMutation.mutate({
+      question: trimmedQuestion,
+    });
+
+    setQuestion("");
   }
 
   return (
@@ -60,12 +81,7 @@ export default function AskForm() {
         </p>
       )}
 
-      {askMutation.data && (
-        <div className="mt-8 border rounded-lg p-4">
-          <p className="font-semibold">Answer</p>
-          <p>{askMutation.data.answer}</p>
-        </div>
-      )}
+
     </>
   );
 }
