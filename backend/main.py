@@ -31,10 +31,12 @@ app.add_middleware(
 # ex) AskReuqest(BaseModel) -> {"question": "What is AI?"} -> you can use it as 'request.question'
 class AskRequest(BaseModel):
     question: str
+    previous_response_id: str | None = None
 
 
 class AskResponse(BaseModel):
     answer: str
+    response_id: str
 
 
 # way to run : python -m uvicorn main:app --reload
@@ -52,6 +54,7 @@ def ask(request: AskRequest):
     response = client.responses.create(
         model=MODEL,
         input=request.question,
+        previous_response_id=request.previous_response_id,
     )
 
-    return {"answer": response.output_text}
+    return {"answer": response.output_text, "response_id": response.id}
