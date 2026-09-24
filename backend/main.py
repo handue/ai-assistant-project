@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel
 from uuid import uuid4
+from document_service import extract_pdf_text
+from document_service import chunk_text
 
 from supabase_client import supabase
 
@@ -72,6 +74,9 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     file_bytes = await file.read()
+    text = extract_pdf_text(file_bytes)
+    chunks = chunk_text(text)
+
     document_id = str(uuid4())
 
     storage_path = f"{document_id}/{file.filename}"
@@ -99,4 +104,24 @@ async def upload_document(file: UploadFile = File(...)):
         .execute()
     )
 
-    return {"document": document.data[0]}
+    chunk_rows = []
+
+    # enumerate: returns both the index and the value of each item in the list.
+    for index, chunk in enumerate(chunks):
+
+        chunk_rows.append(
+            {
+                "document_id": document_id,
+                "chunk_index": index,
+                "content": chunk,
+            }
+        )
+
+    if chunk_rows:
+        supabase.table("document_chunks").insert(chunk_rows).execute()
+
+    return {
+        "document": document.data[0],
+        "text_length": len(text),
+        "chunk_count": len(chunks),
+    }
