@@ -7,15 +7,20 @@ import { useChatStore } from "../store/chatStore";
 
 type AskRequest = {
   question: string;
+  previous_response_id: string | null;
 };
 
 type AskResponse = {
   answer: string;
+  response_id: string;
 }
 
 export default function AskForm() {
   const [question, setQuestion] = useState("");
   // const [submittedQuestion, setSubmittedQuestion] = useState("");
+
+  const previousResponseId = useChatStore((state) => state.previousResponseId);
+  const setPreviousResponseId = useChatStore((state) => state.setPrviousResponseId);
 
   const addMessage = useChatStore((state) => state.addMessage);
 
@@ -27,7 +32,8 @@ export default function AskForm() {
         id: crypto.randomUUID(),
         role: "assistant",
         content: data.answer,
-      })
+      });
+      setPreviousResponseId(data.response_id);
     }
   });
 
@@ -50,6 +56,7 @@ export default function AskForm() {
 
     askMutation.mutate({
       question: trimmedQuestion,
+      previous_response_id: previousResponseId,
     });
 
     setQuestion("");
