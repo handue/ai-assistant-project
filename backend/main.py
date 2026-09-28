@@ -1,127 +1,84 @@
+import logging
 import os
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
-from pydantic import BaseModel
-from uuid import uuid4
-from document_service import extract_pdf_text
-from document_service import chunk_text
+from openai import BadRequestError, RateLimitError
+from pydantic import BaseModel, Field, field_validator
 
-from supabase_client import supabase
+from document_service import MAX_PDF_BYTES, ingest_pdf
+from rag_service import answer_question
 
-load_dotenv()
-
-app = FastAPI()
-
-client = OpenAI()
-
-MODEL = os.getenv("OPENAI_MODEL")
-
-
+logger = logging.getLogger(__name__)
+app = FastAPI(title="PDF Research Assistant")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    # ex) GET, POST, PUT, DELETE, OPTIONS
-    allow_headers=["*"],
-    # ex) Authorization, Set-Cookie, Cookie, Content-Type, Accept, X-Requested-With
+    allow_origins=[os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")],
+    allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
 )
 
 
-# BaseModel: defines the request/response data shape.
-# BaseModel: 요청/응답 데이터의 구조를 정의함.
-# ex) AskReuqest(BaseModel) -> {"question": "What is AI?"} -> you can use it as 'request.question'
 class AskRequest(BaseModel):
-    question: str
-    previous_response_id: str | None = None
+    question: str = Field(min_length=1, max_length=4000)
+    previous_response_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Question cannot be blank.")
+        return value.strip()
+
+
+class Source(BaseModel):
+    document_id: str
+    document_title: str
+    chunk_index: int
+    content: str
+    similarity: float
 
 
 class AskResponse(BaseModel):
     answer: str
-    response_id: str
+    sources: list[Source]
+    response_id: str | None
 
 
-# way to run : python -m uvicorn main:app --reload
-# 실행 방법: python -m uvicorn main:app --reload
+def service_error(exc: Exception) -> HTTPException:
+    # Never expose upstream errors, credentials, or document contents to clients.
+    logger.error("Upstream request failed (%s)", type(exc).__name__)
+    if isinstance(exc, RateLimitError):
+        return HTTPException(429, "OpenAI rate or usage limit reached. Check billing or try again later.")
+    if isinstance(exc, BadRequestError):
+        return HTTPException(400, "OpenAI rejected the request. Start a new chat if conversation context has expired, and check the backend model configuration.")
+    return HTTPException(502, "Document or AI service is unavailable. Check backend configuration and the Supabase migration, then retry.")
 
 
 @app.get("/health")
 def health():
-
     return {"status": "ok"}
 
 
 @app.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest):
-    response = client.responses.create(
-        model=MODEL,
-        input=request.question,
-        previous_response_id=request.previous_response_id,
-    )
-
-    return {"answer": response.output_text, "response_id": response.id}
+    try:
+        return answer_question(request.question, request.previous_response_id)
+    except Exception as exc:
+        raise service_error(exc) from exc
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=400,
-            detail="Only PDF files are allowed.",
-        )
-
-    file_bytes = await file.read()
-    text = extract_pdf_text(file_bytes)
-    chunks = chunk_text(text)
-
-    document_id = str(uuid4())
-
-    storage_path = f"{document_id}/{file.filename}"
-
-    supabase.storage.from_("documents").upload(
-        path=storage_path,
-        file=file_bytes,
-        file_options={
-            "content-type": "application/pdf",
-            "upsert": "false",
-        },
-    )
-
-    document = (
-        supabase.table("documents")
-        .insert(
-            {
-                "id": document_id,
-                "title": file.filename,
-                "original_filename": file.filename,
-                "storage_path": storage_path,
-                "mime_type": file.content_type,
-            }
-        )
-        .execute()
-    )
-
-    chunk_rows = []
-
-    # enumerate: returns both the index and the value of each item in the list.
-    for index, chunk in enumerate(chunks):
-
-        chunk_rows.append(
-            {
-                "document_id": document_id,
-                "chunk_index": index,
-                "content": chunk,
-            }
-        )
-
-    if chunk_rows:
-        supabase.table("document_chunks").insert(chunk_rows).execute()
-
-    return {
-        "document": document.data[0],
-        "text_length": len(text),
-        "chunk_count": len(chunks),
-    }
+def upload_document(file: UploadFile = File(...)):
+    try:
+        if not (file.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(400, "Select a PDF file.")
+        file_bytes = file.file.read(MAX_PDF_BYTES + 1)
+        if len(file_bytes) > MAX_PDF_BYTES:
+            raise HTTPException(413, "PDF must be 20 MB or smaller.")
+        return ingest_pdf(file_bytes, file.filename or "document.pdf")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise service_error(exc) from exc
+    finally:
+        file.file.close()
