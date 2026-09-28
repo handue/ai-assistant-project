@@ -1,0 +1,47 @@
+AI 인프라 리서치 도우미 — 학습 진행 기록
+
+2026-09-18 — 프로젝트 기초
+- 하나의 저장소에 Next.js/React/TypeScript 프론트엔드와 Python/FastAPI 백엔드를 분리해 구성했다.
+- FastAPI 상태 확인 엔드포인트와 기본 리서치 도우미 페이지를 만들었다.
+- 프론트엔드, 백엔드, HTTP API의 역할을 배우고 백엔드 비밀 키를 브라우저에 노출하지 않도록 했다.
+
+2026-09-19 — 프론트엔드/백엔드 연동과 AI 답변
+- CORS와 공통 native fetch API 래퍼를 사용해 프론트엔드를 FastAPI에 연결했다.
+- API의 서버 상태를 위해 TanStack Query를 설정하고 질문 제출에 mutation을 사용했다.
+- Pydantic 요청/응답 모델과 OpenAI Responses API를 이용해 POST /ask를 추가했고, 답변이 프론트엔드에 표시되도록 했다.
+- 요청/응답 검증, 로딩/오류 상태, OpenAI 호출을 백엔드에 두는 이유를 배웠다.
+
+2026-09-22 — 프로젝트 문서화
+- README.md에 프로젝트 개요와 로컬 실행 가이드를 추가했다.
+- 프론트엔드/백엔드 구조와 개발 흐름을 문서화했다.
+
+2026-09-23 — 클라이언트 대화 기록
+- Zustand 대화 스토어와 ChatMessages 컴포넌트를 추가해 사용자와 AI 메시지가 누적되어 보이도록 했다.
+- 공유 클라이언트 상태(Zustand)와 API 서버 상태(TanStack Query)의 차이를 배웠다.
+
+2026-09-24 — 대화 문맥, Supabase, 문서 업로드 및 저장
+- POST /ask에 previous_response_id를 추가하고 반환된 응답 ID를 Zustand에 저장해 후속 질문에서 OpenAI 대화 문맥을 사용할 수 있게 했다.
+- Supabase/PostgreSQL에 documents, document_chunks, conversations, messages 테이블과 문서/청크 및 대화/메시지 관계를 설정하고 RLS를 활성화했다.
+- 환경변수를 사용하는 백엔드 전용 Supabase 클라이언트를 추가하고 연결을 확인했다.
+- documents라는 비공개 Supabase Storage 버킷을 만들었다. POST /documents/upload에서 PDF MIME 타입 확인, 업로드 바이트 읽기, UUID 생성, PDF 업로드, documents 메타데이터 행 삽입을 구현했다.
+- 업로드한 PDF가 Storage와 documents 테이블 양쪽에 저장된 것을 확인했다.
+- multipart UploadFile 처리, UUID, 비공개 파일 저장소, 관계형 메타데이터, 문서 기록과 원본 파일의 분리를 배웠다.
+
+
+2026-09-28 — PDF 추출, 임베딩, 완성된 RAG MVP
+- pypdf 텍스트 추출과 중첩 청크 분할을 추가했다. 청크 크기는 1200자, 중첩은 200자이며 각 청크에 문서 ID와 0부터 시작하는 청크 인덱스를 유지한다.
+- text-embedding-3-small 임베딩을 배치로 생성하고 명시적인 1536차원과 응답 순서를 검증한 뒤 document_chunks.embedding에 저장하도록 완성했다. 문서 청크와 질문에 같은 임베딩 모델을 사용한다.
+- pgvector, 문서/청크 테이블, 파일 해시, 수집 상태, 고유 인덱스, match_document_chunks를 위한 실행 가능한 Supabase SQL 마이그레이션을 추가했다. 코사인 거리로 순위를 정하고 1에서 거리를 뺀 값으로 유사도를 계산한다. 유사도 0.3 이상인 상위 5개 청크를 검색한다.
+- POST /ask를 질문 임베딩 → Supabase 벡터 검색 → 번호가 있는 문맥 → OpenAI Responses API → 근거 기반 답변·출처·응답 ID 흐름으로 연결했다. 매 턴 근거 사용 지침을 전달하며 관련 문맥이 없으면 정보 부족을 반환한다.
+- 대화 DB 없이 기존 다중 턴 응답 문맥을 유지했다. OpenAI 응답 ID로 대화를 이어가고, 매 답변의 사실 근거는 새로 검색한 청크에서 제공한다. 모호한 후속 질문은 검색을 위해 주제를 명시해야 할 수 있다.
+- 공통 OpenAI/임베딩 설정을 ai_client.py, 문서 수집을 document_service.py, 검색/생성을 rag_service.py로 분리했다. main.py는 HTTP 엔드포인트, 검증, CORS, 안전한 서비스 오류를 담당한다.
+- 대기·성공·오류 상태를 갖춘 최소 PDF 업로드 UI를 추가했다. 답변마다 문서 제목/ID, 청크 인덱스, 코사인 유사도, 미리보기, 펼칠 수 있는 원문 출처를 표시한다. TanStack Query는 요청을, Zustand는 대화와 출처를 관리한다. 새 대화 기능을 추가했다.
+- SHA-256 중복 감지와 DB 고유성, 불완전한 업로드를 검색에서 제외하는 processing/ready 상태, 파일/텍스트 크기 제한, 수집 실패 시 DB/Storage 정리를 추가했다. Storage와 PostgreSQL이 하나의 트랜잭션을 공유할 수 없음을 배웠다.
+- 임시 BackendStatus UI와 사용하지 않는 API 함수를 제거하고 기본 페이지 메타데이터를 교체했다. 기존 로컬 환경변수 파일을 유지하고 Git 제외 규칙을 강화했으며 설정, 구조, 수동 검증, MVP 한계를 문서화했다.
+- 실제 PDF 파싱과 FastAPI 요청 흐름을 검증하는 오프라인 통합 테스트를 추가했다. Storage/벡터 검색을 모의 구현하고 OpenAI를 대체하여 문서 수집, 출처, 후속 질문, 중복 재사용, 검색 결과 없음, 잘못된 PDF, 사용량 제한, 실패한 업로드 정리를 확인한다. 이 검증은 실제 SQL/OpenAI 연동 검증을 대체하지 않는다.
+- 백엔드 테스트 9개, 프론트엔드 lint, TypeScript 검증, 프로덕션 빌드를 모두 통과했다. 출처 렌더링과 새 대화 초기화도 로컬에서 확인했다.
+- 의미 기반 검색, 임베딩 차원 일관성, 코사인 유사도, 문맥 기반 근거 사용, 출처 추적, 검색된 근거와 답변 신뢰도의 차이를 배웠다.
+
+최종 스택: Next.js, React, TypeScript, Tailwind CSS, TanStack Query, Zustand, Python, FastAPI, Pydantic, pypdf, OpenAI Responses API, text-embedding-3-small, Supabase PostgreSQL, pgvector, 비공개 Supabase Storage.
+최종 파이프라인: PDF 업로드 → Storage → PDF 텍스트 추출/청크 분할 → 임베딩 → pgvector 저장 → 질문 임베딩 → 벡터 검색 → 근거 기반 OpenAI 답변 → Next.js 출처 표시. 구현에서는 읽을 수 없는 PDF를 먼저 거부하기 위해 Storage 저장 전에 텍스트를 추출하며, 두 작업이 모두 완료되어야 검색 가능하다.
+현재 상태: 최소 RAG MVP 코드 구현을 완료했다. 포함된 SQL 마이그레이션을 Supabase에서 직접 적용하고 README의 전체 실제 연동 검증을 수행해야 한다. 로컬 통합 테스트는 외부 서비스를 대체하므로 실제 벡터 SQL과 모델 동작은 수동 테스트로 확인한다. 대화는 브라우저 메모리에만 보관하며 기존 conversations/messages 테이블은 사용하지 않는다. 인증, 에이전트, 함수 호출 시스템, 스트리밍, 영속 대화 저장은 범위에서 제외한다.

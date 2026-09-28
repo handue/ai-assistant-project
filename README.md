@@ -1,51 +1,46 @@
-# AI Assistant Project
+# PDF Research Assistant — RAG MVP
 
-[English](#english) | [한국어](#한국어)
+Upload a text PDF, ask questions, and inspect the document excerpts used for each answer.
+A minimal portfolio project with multi-turn conversation context and no authentication, streaming, agents, or conversation database.
 
-## English
+## Architecture
 
-An AI question-and-answer web application built with Next.js and FastAPI.
-The project aims to become a research assistant for exploring AI infrastructure companies and related documents.
-The current implementation sends user questions to the OpenAI API through the backend and displays the answers in the browser.
-
-### Current Features
-
-- Question input and AI answer display
-- Loading indicators and request error messages
-- Backend health check API (`GET /health`)
-
-Each question is currently processed independently. Conversation context, chat history storage, document uploads, and document search are not yet implemented.
-
-### Tech Stack
-
-- **Frontend:** Next.js App Router, React, TypeScript, Tailwind CSS, TanStack Query
-- **Backend:** Python, FastAPI, Uvicorn
-- **AI integration:** OpenAI Python SDK, Responses API
-
-### Project Structure
+- **Frontend:** Next.js App Router, React, TypeScript, Tailwind CSS. TanStack Query manages question/upload mutations; Zustand holds chat messages, sources, and OpenAI response IDs in browser memory.
+- **Backend:** FastAPI, Pydantic, pypdf, OpenAI Python SDK, Supabase Python SDK.
+- **AI:** OpenAI Responses API for answers; `text-embedding-3-small` with 1536 dimensions for both documents and questions.
+- **Persistence:** Supabase PostgreSQL stores document metadata and chunks; pgvector performs cosine search. A private Supabase Storage bucket stores original PDFs.
 
 ```text
-ai-assistant-project/
-├── backend/
-│   ├── main.py             # API endpoints and AI integration
-│   └── requirements.txt    # Python dependencies
-├── frontend/
-│   ├── app/                # Pages and global configuration
-│   ├── components/         # Question form and backend status component
-│   ├── lib/api.ts          # Backend request helpers
-│   └── package.json        # Frontend dependencies and scripts
-├── docs/                   # Learning notes
-└── README.md
+PDF selection → POST /documents/upload
+  → validate PDF → extract text → 1200-character chunks (200-character overlap)
+  → reserve SHA-256 hash → Supabase Storage
+  → batch embeddings → document_chunks.embedding → mark document ready
+
+Question → POST /ask → question embedding
+  → match_document_chunks RPC (top 5, cosine similarity ≥ 0.3)
+  → numbered retrieved excerpts + question → OpenAI Responses API
+  → answer + sources + response_id → Next.js chat and source previews
 ```
 
-### Local Setup
+`main.py` handles HTTP validation and errors. `document_service.py` handles ingestion and cleanup. `ai_client.py` shares the OpenAI client and embedding configuration. `rag_service.py` handles retrieval, context assembly, and grounded generation. `supabase_client.py` provides the backend-only database/storage client.
 
-You will need Python 3, Node.js with npm, and an OpenAI API key.
-The commands below are for macOS/Linux. Run the backend and frontend in separate terminals.
+Every answer request supplies grounding instructions again and retrieves fresh context. Prior OpenAI responses help interpret conversation context; current retrieved excerpts are the factual evidence. If no excerpts meet the threshold, the backend returns an insufficient-information answer with no sources and skips answer generation. Sources are retrieved evidence, not a guarantee that every excerpt was cited by the model.
 
-#### 1. Set Up the Backend
+## Setup
 
-From the project root, run:
+Use Python 3.11+ and a Node.js version supported by the installed Next.js (Node 20.9+). You need OpenAI API access and a Supabase project.
+
+### 1. Supabase (manual)
+
+Run [supabase/migrations/202609280001_rag.sql](supabase/migrations/202609280001_rag.sql) in your project's SQL editor. It creates missing document tables, adds `content_hash` and `ingestion_status`, enables pgvector/RLS, adds unique indexes, creates the cosine-search RPC, and creates the private `documents` bucket if absent. Existing rows are preserved. The RPC uses `1 - cosine distance` for similarity and orders by ascending cosine distance. Exact search keeps this small corpus simple.
+
+The backend requires a Supabase **secret key or legacy service-role key**; a browser/anonymous key cannot perform these operations. The search function is callable only by the service role.
+
+If the migration reports duplicate `(document_id, chunk_index)` values, inspect and resolve those existing duplicate rows before rerunning; the migration deliberately does not delete existing data. If a `match_document_chunks` function already exists with a different signature/return type, review that function before replacing it.
+
+Old chunks without embeddings are excluded from retrieval. Re-upload old PDFs through the completed ingestion flow to index them. Old document rows have no content hash, so the first re-upload of a legacy PDF can create a new document; subsequent byte-identical uploads reuse it. Similar text in different PDF files is not deduplicated.
+
+### 2. Backend
 
 ```bash
 cd backend
@@ -54,220 +49,115 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Create `backend/.env` with the following values.
-Replace the placeholders with your API key and a model ID you have access to.
+Use your existing `backend/.env`, or create one with these backend-only settings:
 
 ```dotenv
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=your_model_id_here
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=your_backend_secret_or_service_role_key
+FRONTEND_ORIGIN=http://localhost:3000
 ```
 
-Start the development server from the `backend` directory:
+Keep the existing answer model if already configured. Keep the same embedding model and dimensions for ingestion and retrieval; changing the embedding model requires reindexing the corpus.
 
 ```bash
 python -m uvicorn main:app --reload
 ```
 
-- Backend: http://localhost:8000
-- API documentation: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+API: http://localhost:8000 · Interactive docs: http://localhost:8000/docs.
+`GET /health` checks that the application runs; it does not check upstream credentials/services.
 
-#### 2. Set Up the Frontend
+### 3. Frontend
 
-Open a new terminal and run the following from the project root:
+In a separate terminal:
 
 ```bash
 cd frontend
-npm install
-```
-
-Create `frontend/.env.local` with the following value:
-
-```dotenv
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-Start the development server from the `frontend` directory:
-
-```bash
+npm ci
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser and enter a question.
-The backend's current CORS configuration allows this frontend address.
+Use your existing `frontend/.env`, or create one containing only `NEXT_PUBLIC_API_URL=http://localhost:8000`.
+Open http://localhost:3000. Secrets belong exclusively in `backend/.env`. Avoid conflicting values across `.env` and `.env.local`.
 
-### API Reference
+## API
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/health` | Returns the server status: `{"status":"ok"}` |
-| POST | `/ask` | Accepts a question and returns an AI answer |
+- `POST /documents/upload`: multipart form field `file`; returns `document`, `chunk_count`, and `duplicate`. A new upload also returns `text_length`. Success means every chunk has an embedding and the document is ready for search.
+- `POST /ask`: JSON `{ "question": "What is the reported revenue?", "previous_response_id": null }`.
 
-Example `POST /ask` request:
+Example answer (chunk indexes start at zero; citation numbers start at one):
 
 ```json
 {
-  "question": "What is AI infrastructure?"
+  "answer": "Reported revenue was 42 million dollars [1].",
+  "response_id": "resp_...",
+  "sources": [
+    {
+      "document_id": "document-uuid",
+      "document_title": "annual-report.pdf",
+      "chunk_index": 0,
+      "content": "Reported revenue was 42 million dollars...",
+      "similarity": 0.82
+    }
+  ]
 }
 ```
 
-Response format:
+Pass the returned `response_id` for follow-ups. It can be null when no context has been generated. The frontend handles this and provides **New chat** to reset conversation context.
 
-```json
-{
-  "answer": "The AI-generated answer to your question"
-}
+## Manual end-to-end test
+
+1. Apply the SQL migration, fill backend environment values, and start both servers.
+2. Upload a text PDF containing a recognizable fact (for example, a company and its annual revenue). Wait for **Ready: … (N chunks)**.
+3. In Supabase, check the original PDF in the private `documents` bucket, a `documents` row with `ingestion_status = ready` and a content hash, and ordered `document_chunks` rows with non-null 1536-dimensional embeddings.
+4. Ask an explicit question about that fact. Confirm the answer references `[1]` and the Sources section shows the filename, chunk index, similarity, preview, and expandable full excerpt/document ID.
+5. Ask a follow-up mentioning the company/topic. Confirm chat context continues and each answer has its own sources. Retrieval embeds the current question, so explicit follow-ups work better than vague pronouns.
+6. Upload the identical PDF again. Confirm **Already indexed**, the same document ID, and no new document/chunk rows.
+7. Ask something unrelated, or ask before uploading in a fresh project. Confirm an insufficient-information response, not an invented answer.
+8. Try a non-PDF, a corrupt PDF, and an image-only PDF. Confirm clear error messages. Use **New chat** to reset context; refreshing clears all local chat history.
+
+For a database check in the Supabase SQL editor:
+
+```sql
+select d.title, d.ingestion_status, c.chunk_index,
+       vector_dims(c.embedding) as dimensions
+from public.documents d
+join public.document_chunks c on c.document_id = d.id
+order by d.created_at desc, c.chunk_index;
 ```
 
-### Development Commands
+## Local verification
 
-Run these commands from the `frontend` directory:
+No network/API calls are made by these tests:
 
 ```bash
-npm run lint   # Check code with ESLint
-npm run build  # Create a production build
-npm run start  # Serve the built frontend
+# From the repository root, after installing backend dependencies:
+backend/.venv/bin/python -m unittest discover -s backend/tests -v
+
+cd frontend
+npm run lint
+npm run build
 ```
 
-### Configuration and Troubleshooting
+The backend suite uses real multipart FastAPI requests and PDF extraction/chunking, with in-memory Supabase/Storage and mocked OpenAI. It checks ingestion, 1536-dimensional vectors, retrieval/context/source contracts, multi-turn IDs, duplicate handling, failed-ingestion cleanup, invalid/empty PDFs, no-match answers, and rate-limit errors. It does **not** validate the deployed SQL function or real OpenAI answers; run the manual flow for live integration.
 
-- If the backend fails to start, check your virtual environment, installed dependencies, and `OPENAI_API_KEY` setting.
-- If a question request fails, check the backend terminal for errors and verify `OPENAI_MODEL`.
-- If the frontend cannot reach the API, confirm that the backend is running and `NEXT_PUBLIC_API_URL` is correct. Restart the frontend development server after changing environment variables.
-- Store your API key only in `backend/.env`. The current `.gitignore` excludes the backend `.env` and frontend `.env*` files.
+## MVP limits and error recovery
 
----
+- Text PDFs only (no OCR), up to 20 MB and 500,000 extracted characters. Indexing is synchronous; keep PDFs reasonably small.
+- Duplicate protection uses a SHA-256 file hash and a unique database index. Concurrent uploads return a retryable conflict. Chunks are uniquely indexed by document and chunk index.
+- Only ready documents are retrieved. Failed ingestion attempts remove their metadata, chunks, and Storage object where possible. Storage and database operations cannot share one transaction. A process crash can leave a `processing` document; inspect/remove that incomplete upload in Supabase before retrying. Cleanup failures are logged with the document ID.
+- Cosine similarity is a relevance score, not confidence or a percentage. The fixed 0.3 threshold is a simple starting point.
+- Chunking uses characters and can split sentences. Multi-turn context is managed by OpenAI response IDs, with no persistent conversation tables in use. The current-question embedding can miss context in vague follow-ups.
+- This MVP has no authentication and searches a shared corpus. Run locally for a portfolio demo; do not expose an unrestricted backend publicly.
+- `.env`, `.venv`, `node_modules`, build artifacts, and Python bytecode are ignored. Local environment files are not committed.
 
 ## 한국어
 
-Next.js와 FastAPI로 만드는 AI 질문·답변 웹 애플리케이션입니다.
-AI 인프라 기업과 관련 문서를 조사하는 리서치 도우미를 목표로 개발하고 있습니다.
-현재는 사용자가 입력한 질문을 백엔드에서 OpenAI API로 전달하고, 반환된 답변을 화면에 표시하는 기본 기능을 구현했습니다.
+PDF 업로드부터 근거 기반 답변과 출처 표시까지 연결한 최소 RAG MVP입니다.
+Next.js/TypeScript 프론트엔드는 TanStack Query로 업로드·질문 요청을 관리하고, Zustand로 대화·출처·응답 ID를 메모리에 보관합니다. FastAPI 백엔드는 PDF를 파싱하고 청크로 나눈 뒤 OpenAI 임베딩을 생성합니다. 원본 PDF는 Supabase Storage, 메타데이터와 1536차원 벡터는 PostgreSQL/pgvector에 저장합니다.
 
-### 현재 기능
+Supabase SQL 편집기에서 위 마이그레이션을 직접 실행한 후, 백엔드 `.env`에 OpenAI 키·모델과 Supabase URL·서버 전용 키를 설정하세요. 프론트엔드에는 API 주소만 설정합니다. 두 서버를 실행하고 텍스트 PDF 업로드 → 색인 완료 → 문서 관련 질문 → 답변 아래 출처 확인 순서로 테스트하세요. 같은 파일을 다시 업로드하면 기존 문서를 재사용합니다.
 
-- 질문 입력 및 AI 답변 표시
-- 답변 요청 중 로딩 상태와 요청 실패 메시지 표시
-- 백엔드 상태 확인 API (`GET /health`)
-
-현재 각 질문은 독립적으로 처리됩니다. 이전 대화를 이어가는 기능, 대화 저장, 문서 업로드 및 검색은 아직 구현하지 않았습니다.
-
-### 기술 스택
-
-- **프론트엔드:** Next.js App Router, React, TypeScript, Tailwind CSS, TanStack Query
-- **백엔드:** Python, FastAPI, Uvicorn
-- **AI 연동:** OpenAI Python SDK, Responses API
-
-### 프로젝트 구조
-
-```text
-ai-assistant-project/
-├── backend/
-│   ├── main.py             # API 엔드포인트 및 AI 연동
-│   └── requirements.txt    # Python 의존성
-├── frontend/
-│   ├── app/                # 페이지 및 전역 설정
-│   ├── components/         # 질문 폼, 백엔드 상태 컴포넌트
-│   ├── lib/api.ts          # 백엔드 요청 함수
-│   └── package.json        # 프론트엔드 의존성 및 실행 명령
-├── docs/                   # 학습 기록
-└── README.md
-```
-
-### 로컬 실행 방법
-
-Python 3, Node.js와 npm, OpenAI API 키가 필요합니다.
-아래 명령은 macOS/Linux 터미널 기준이며, 프론트엔드와 백엔드를 각각 별도 터미널에서 실행합니다.
-
-#### 1. 백엔드 설정
-
-프로젝트 루트에서 실행합니다.
-
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-`backend/.env` 파일을 만들고 다음 두 값을 입력합니다.
-예시의 값을 실제 API 키와 사용할 수 있는 모델 ID로 바꾸세요.
-
-```dotenv
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=your_model_id_here
-```
-
-`backend` 폴더에서 개발 서버를 실행합니다.
-
-```bash
-python -m uvicorn main:app --reload
-```
-
-- 백엔드: http://localhost:8000
-- API 문서: http://localhost:8000/docs
-- 상태 확인: http://localhost:8000/health
-
-#### 2. 프론트엔드 설정
-
-새 터미널을 열고 프로젝트 루트에서 실행합니다.
-
-```bash
-cd frontend
-npm install
-```
-
-`frontend/.env.local` 파일을 만들고 다음 값을 입력합니다.
-
-```dotenv
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-`frontend` 폴더에서 개발 서버를 실행합니다.
-
-```bash
-npm run dev
-```
-
-브라우저에서 http://localhost:3000 을 열고 질문을 입력하세요.
-현재 백엔드의 CORS 설정은 이 프론트엔드 주소를 허용합니다.
-
-### API
-
-| 메서드 | 경로 | 설명 |
-| --- | --- | --- |
-| GET | `/health` | 서버 상태 반환: `{"status":"ok"}` |
-| POST | `/ask` | 질문을 전달하고 AI 답변 반환 |
-
-`POST /ask` 요청 예시:
-
-```json
-{
-  "question": "AI 인프라란 무엇인가요?"
-}
-```
-
-응답 형식:
-
-```json
-{
-  "answer": "질문에 대한 AI 답변"
-}
-```
-
-### 개발 명령어
-
-`frontend` 폴더에서 실행합니다.
-
-```bash
-npm run lint   # 코드 규칙 검사
-npm run build  # 프로덕션 빌드
-npm run start  # 빌드한 프론트엔드 실행
-```
-
-### 설정 확인
-
-- 백엔드가 시작되지 않으면 가상환경, 의존성 설치, `OPENAI_API_KEY` 설정을 확인하세요.
-- 질문 요청이 실패하면 백엔드 터미널의 오류와 `OPENAI_MODEL` 값을 확인하세요.
-- 프론트엔드에서 API에 연결되지 않으면 백엔드 실행 여부와 `NEXT_PUBLIC_API_URL`을 확인하세요. 환경변수를 변경했다면 프론트엔드 개발 서버를 재시작하세요.
-- API 키는 `backend/.env`에만 저장하세요. 현재 `.gitignore`는 백엔드 `.env`와 프론트엔드 `.env*` 파일을 제외하도록 설정되어 있습니다.
+검색은 질문 임베딩과 청크 벡터의 코사인 유사도로 상위 5개를 선택합니다. 모델은 현재 검색된 청크만 사실 근거로 사용하도록 지시받습니다. 관련 자료가 없으면 정보 부족을 반환합니다. 오래된 임베딩 없는 문서는 다시 업로드해야 하며, 대화 기록은 새로고침하면 사라집니다. 인증·에이전트·스트리밍·대화 DB는 범위에 포함하지 않았습니다. 로컬 자동 테스트는 외부 서비스를 대체하므로 실제 Supabase SQL 및 OpenAI 연동은 위 수동 테스트로 확인해야 합니다.

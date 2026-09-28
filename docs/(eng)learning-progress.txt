@@ -1,0 +1,47 @@
+AI Infrastructure Research Assistant — learning progress
+
+2026-09-18 — Project foundation
+- Created one repository with separate Next.js/React/TypeScript frontend and Python/FastAPI backend.
+- Added the FastAPI health endpoint and a basic research assistant page.
+- Learned the roles of the frontend, backend, and HTTP API; kept backend secrets out of the browser.
+
+2026-09-19 — Frontend/backend integration and AI answers
+- Connected the frontend to FastAPI with CORS and a shared native-fetch API wrapper.
+- Set up TanStack Query for API server state and used a mutation to submit questions.
+- Added POST /ask with Pydantic request/response models and the OpenAI Responses API; answers appear in the frontend.
+- Learned request/response validation, loading/error states, and why OpenAI calls belong in the backend.
+
+2026-09-22 — Project documentation
+- Added the project overview and local setup guide in README.md.
+- Documented the frontend/backend structure and development workflow.
+
+2026-09-23 — Client-side chat history
+- Added a Zustand chat store and a ChatMessages component to show accumulated user and assistant messages.
+- Learned the distinction between shared client state (Zustand) and API server state (TanStack Query).
+
+2026-09-24 — Conversation context, Supabase, and Document Upload & Storage
+- Added previous_response_id to POST /ask and stored the returned response ID in Zustand so follow-up questions can use OpenAI conversation context.
+- Set up Supabase/PostgreSQL tables for documents, document_chunks, conversations, and messages, with the corresponding document/chunk and conversation/message relationships; enabled RLS.
+- Added a backend-only Supabase client using environment variables and confirmed the connection.
+- Created a private Supabase Storage bucket named documents. Added POST /documents/upload, which checks the PDF MIME type, reads uploaded bytes, generates a UUID, uploads the PDF, and inserts a documents metadata row.
+- Verified that an uploaded PDF appears both in Storage and in the documents table.
+- Learned multipart UploadFile handling, UUIDs, private object storage, relational metadata, and the separation between document records and original files.
+
+
+2026-09-28 — PDF extraction, embeddings, and complete RAG MVP
+- Added pypdf text extraction and overlapping chunks: 1200 characters per chunk with 200-character overlap. Each chunk retains its document ID and zero-based chunk index.
+- Completed batched text-embedding-3-small embedding generation with explicit 1536 dimensions, response-order checks, and storage in document_chunks.embedding. The same embedding model is used for document chunks and questions.
+- Added a runnable Supabase SQL migration for pgvector, document/chunk tables, content hashes, ingestion state, unique indexes, and match_document_chunks. Cosine distance ranks chunks; 1 minus distance produces similarity. Retrieval returns up to five chunks above a 0.3 similarity threshold.
+- Connected POST /ask to question embedding → Supabase vector search → numbered context → OpenAI Responses API → grounded answer, sources, and response ID. Grounding instructions are supplied on every turn; irrelevant or missing context produces an insufficient-information answer.
+- Preserved multi-turn response context without a conversation database. OpenAI response IDs support conversation continuity; fresh retrieved excerpts supply factual evidence for each answer. Vague follow-ups can need explicit topic wording for retrieval.
+- Moved shared OpenAI/embedding configuration into ai_client.py, ingestion into document_service.py, and retrieval/generation into rag_service.py. main.py now handles HTTP endpoints, validation, CORS, and safe service errors.
+- Added a minimal PDF upload UI with pending/success/error states. Added per-answer sources with document title/ID, chunk index, cosine similarity, preview, and expandable text. TanStack Query manages requests; Zustand stores chat and sources. Added a New chat action.
+- Added SHA-256 duplicate detection and database uniqueness, processing/ready states to exclude partial uploads, bounded file/text sizes, and best-effort cleanup of failed database/Storage ingestion. Learned that Storage and PostgreSQL cannot share a transaction.
+- Removed the temporary BackendStatus UI and unused API helper, replaced starter page metadata, retained existing local environment files, strengthened ignore rules, and documented setup, architecture, manual verification, and MVP limits.
+- Added offline integration tests for real PDF parsing and FastAPI request flow, using simulated Storage/vector retrieval and mocked OpenAI. Covered ingestion, sources, follow-ups, duplicate reuse, no-match behavior, invalid PDFs, rate limits, and failed-upload cleanup. These checks do not replace live SQL/OpenAI verification.
+- Passed all nine backend tests, frontend lint, TypeScript validation, and the production build. Also verified source rendering and New chat reset locally.
+- Learned semantic retrieval, embedding-dimension consistency, cosine similarity, context grounding, source provenance, and the difference between retrieved evidence and answer confidence.
+
+Final stack: Next.js, React, TypeScript, Tailwind CSS, TanStack Query, Zustand, Python, FastAPI, Pydantic, pypdf, OpenAI Responses API, text-embedding-3-small, Supabase PostgreSQL, pgvector, and private Supabase Storage.
+Final pipeline: PDF upload → Storage → PDF text extraction/chunking → embeddings → pgvector storage → question embedding → vector retrieval → grounded OpenAI answer → sources displayed in Next.js. The implementation extracts text before writing Storage to reject unreadable PDFs early; both operations complete before an upload is searchable.
+Current status: The minimal RAG MVP code is complete. Apply the included SQL migration manually in Supabase and follow README's full live verification steps. Local integration tests simulate external services; actual vector SQL and model behavior require that manual test. Chat remains browser-memory-only; existing conversations/messages tables are unused. Authentication, agents, function-calling systems, streaming, and persistent conversation storage remain out of scope.
