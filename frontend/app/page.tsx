@@ -1,5 +1,5 @@
 import AskForm from "@/components/AskForm";
-import BackendStatus from "@/components/BackendStatus";
+import DocumentUpload from "@/components/DocumentUpload";
 import ChatMessages from "@/components/ChatMessages";
 
 export default function Home() {
@@ -11,9 +11,9 @@ export default function Home() {
         </h1>
 
         <p className="text-gray-500 mb-8">
-          Ask questions about you want to know
+          Upload PDFs and ask questions with document sources.
         </p>
-        {/* <BackendStatus /> */}
+        <DocumentUpload />
         <AskForm />
         <ChatMessages />
 
